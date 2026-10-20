@@ -86,18 +86,45 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ---------- CD: deploy (main only, gated by environment) ----------
+  # ---------- CD: deploy to AWS EC2 over SSH (main only) ----------
   deploy:
-    name: Deploy to Production
+    name: Deploy to AWS EC2
     needs: build-and-push
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production   # add required reviewers in repo Settings > Environments
+    environment: production
+    permissions:
+      contents: read
+      packages: read   # lets the EC2 server pull the image from GHCR
     steps:
-      - name: Deploy
+      - name: Configure SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
-          echo "Deploying ${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}"
-          # Replace with your real deploy step, e.g.:
-          #   - ssh into a server and `docker compose pull && docker compose up -d`
-          #   - kubectl set image deployment/app app=${{ env.IMAGE_NAME }}:sha-...
-          #   - a cloud action (aws-actions/*, azure/*, google-github-actions/*)
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy container
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Image names must be lowercase; tag matches the "type=sha" tag built above
+          IMAGE="${IMAGE_NAME,,}:sha-${GITHUB_SHA::7}"
+
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" bash -s <<EOF
+          set -e
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker pull "$IMAGE"
+          docker logout ghcr.io
+          docker rm -f simple-api || true
+          docker run -d --name simple-api --restart unless-stopped -p 80:8000 "$IMAGE"
+          # Fail the deploy if the app doesn't come up healthy
+          curl -fsS --retry 10 --retry-delay 3 --retry-connrefused http://localhost/health
+          docker image prune -f
+          EOF
