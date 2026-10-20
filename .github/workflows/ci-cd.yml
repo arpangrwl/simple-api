@@ -125,6 +125,6 @@ jobs:
           docker rm -f simple-api || true
           docker run -d --name simple-api --restart unless-stopped -p 80:8000 "$IMAGE"
           # Fail the deploy if the app doesn't come up healthy
-          curl -fsS --retry 10 --retry-delay 3 --retry-connrefused http://localhost/health
+          curl -fsS --retry 10 --retry-delay 3 --retry-connrefused --retry-all-errors http://localhost/health
           docker image prune -f
           EOF
