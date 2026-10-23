@@ -1,8 +1,9 @@
 """Version 2: adds a category to items, plus filtering by category."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app import store
+from app.auth.deps import require_role
 
 router = APIRouter()
 
@@ -33,6 +34,11 @@ def get_item(item_id: int):
     return item
 
 
-@router.post("/items", status_code=201, response_model=Item)
+@router.post(
+    "/items",
+    status_code=201,
+    response_model=Item,
+    dependencies=[Depends(require_role("admin"))],  # only admins can create
+)
 def create_item(payload: ItemCreate):
     return store.add(payload.name, payload.price, payload.category)
